@@ -1,0 +1,95 @@
+- name: Create podman user
+  ansible.builtin.user:
+    name: "caddy"
+    shell: /bin/false
+    home: "/srv/caddy"
+
+- name: Set systemd user directory
+  changed_when: false
+  ansible.builtin.set_fact:
+    service_files_dir: "/srv/caddy/.config/systemd/user"
+    systemd_scope: user
+
+- name: Create systemd user directory
+  ansible.builtin.file:
+    path: "{{ service_files_dir }}"
+    state: directory
+    owner: "caddy"
+    group: "caddy"
+
+- name: Get podman user id
+  ansible.builtin.command: "id -u caddy"
+  register: project_user_uid
+  check_mode: false
+  changed_when: false
+
+- name: Set XDG runtime for current systemd tasks
+  ansible.builtin.set_fact:
+    xdg_runtime_dir: "/run/user/{{ project_user_uid.stdout }}"
+  changed_when: false
+
+- name: Set XDG runtime for new sessions
+  become: true
+  become_user: "caddy"
+  ansible.builtin.lineinfile:
+    path: "/srv/caddy/.bashrc"
+    line: "export XDG_RUNTIME_DIR=/run/user/$UID"
+    state: present
+
+- name: Check if user is lingering
+  register: user_lingering
+  ansible.builtin.stat:
+    path: "/var/lib/systemd/linger/caddy"
+
+- name: Enable lingering
+  ansible.builtin.command: "loginctl enable-linger caddy"
+  when:
+    - not user_lingering.stat.exists
+
+- name: Add data directory
+  ansible.builtin.file:
+    owner: "caddy"
+    group: "caddy"
+    name: "/srv/caddy/data"
+    state: directory
+
+- name: Upload configuration
+  ansible.builtin.copy:
+    owner: "caddy"
+    group: "caddy"
+    src: "caddy/Caddyfile"
+    dest: "/srv/caddy/Caddyfile"
+
+- name: Pull podman image
+  containers.podman.podman_image:
+    name: caddy
+    pull: true
+    tag: alpine
+
+- name: Setup podman container
+  become: true
+  become_user: "caddy"
+  containers.podman.podman_container:
+    name: caddy
+    image: caddy:alpine
+    ports:
+      - 80:80
+      - 443:443
+    volume:
+      - "/srv/caddy/Caddyfile:/etc/caddy/Caddyfile:z"
+      - "/srv/caddy/data:/data:z"
+    timezone: local
+    rm: true
+    generate_systemd:
+      new: true
+      path: "/srv/caddy/.config/systemd/user"
+      restart_policy: always
+
+- name: Enable podman container service
+  become: true
+  become_user: "caddy"
+  ansible.builtin.systemd:
+    name: "container-caddy"
+    scope: user
+    state: restarted
+    enabled: true
