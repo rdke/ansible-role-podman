@@ -3,7 +3,7 @@
     name: podman
     state: present
 
-- name: Allow rootless containers to use ports starting from 23
+- name: Allow rootless containers to use ports lower than {{ unprivileged_port_start }}
   ansible.builtin.sysctl:
     name: net.ipv4.ip_unprivileged_port_start
     value: "{{ unprivileged_port_start }}"
